@@ -29,11 +29,7 @@ import asyncio
 import logging
 import os
 import sys
-import socket
-if sys.version_info[0] == 2:
-    from urlparse import urlparse
-else:
-    from urllib.parse import urlparse
+from urllib.parse import urlparse
 
 import tornado.httpserver
 import tornado.ioloop
@@ -41,8 +37,14 @@ import tornado.iostream
 import tornado.web
 import tornado.httpclient
 import tornado.httputil
+import tornado.tcpclient
 
 logger = logging.getLogger('tornado_proxy')
+hd = logging.StreamHandler()
+fmt = logging.Formatter("||%(asctime)s|%(name)s|%(levelname)s||%(message)s")
+hd.setFormatter(fmt)
+logger.addHandler(hd)
+logger.setLevel('DEBUG')
 
 __all__ = ['ProxyHandler', 'run_proxy']
 
@@ -68,16 +70,35 @@ def fetch_request(url, **kwargs):
         kwargs['proxy_host'] = host
         kwargs['proxy_port'] = port
 
-    req = tornado.httpclient.HTTPRequest(url, **kwargs)
     client = tornado.httpclient.AsyncHTTPClient()
-    return client.fetch(req, raise_error=False)
+    return client.fetch(url, raise_error=False, follow_redirects=True, max_redirects=3)
 
 
 class ProxyHandler(tornado.web.RequestHandler):
-    SUPPORTED_METHODS = ['GET', 'POST', 'CONNECT']
+    SUPPORTED_METHODS = ("GET", "HEAD", "POST", "DELETE", "PATCH", "PUT", "OPTIONS", "CONNECT")
     
     def compute_etag(self):
         return None # disable tornado Etag
+
+    async def prepare(self):
+        logger.debug("Prepare to %s %s %s" % (self.request.method, self.request.uri, self.request.headers))
+        return super(ProxyHandler, self).prepare()
+
+    async def options(self):
+        cors = self.get_argument('cors', None)
+        if not cors:
+            return self.get()
+
+        self.set_header('Access-Control-Allow-Credentials', 'true')
+        self.set_header('Access-Control-Max-Age', 86400)
+        if 'Access-Control-Request-Headers' in self.request.headers:
+            self.set_header('Access-Control-Allow-Headers',
+                            self.request.headers.get('Access-Control-Request-Headers'))
+        if 'Access-Control-Request-Method' in self.request.headers:
+            self.set_header('Access-Control-Allow-Methods',
+                            self.request.headers.get('Access-Control-Request-Method'))
+        self.set_status(204)
+        await self.finish()
 
     async def get(self):
         logger.debug('Handle %s request to %s', self.request.method,
@@ -119,10 +140,14 @@ class ProxyHandler(tornado.web.RequestHandler):
             else:
                 self.set_status(500)
                 self.write('Internal server error:\n' + str(e))
-                self.finish()
 
-    async def post(self):
-        return await self.get()
+                await self.finish()
+
+    put = get
+    post = get
+    head = get
+    patch = get
+    delete = get
 
     async def connect(self):
         logger.debug('Start CONNECT to %s', self.request.uri)
@@ -162,29 +187,28 @@ class ProxyHandler(tornado.web.RequestHandler):
                     return
 
             self.set_status(500)
-            self.finish()
+            await self.finish()
 
         async def start_proxy_tunnel():
-            upstream.write('CONNECT %s HTTP/1.1\r\n' % self.request.uri)
-            upstream.write('Host: %s\r\n' % self.request.uri)
-            upstream.write('Proxy-Connection: Keep-Alive\r\n\r\n')
-            data = await upstream.read_until('\r\n\r\n')
-            on_proxy_response(data)
+            await upstream.write(b'CONNECT %s HTTP/1.1\r\n' % self.request.uri)
+            await upstream.write(b'Host: %s\r\n' % self.request.uri)
+            await upstream.write(b'Proxy-Connection: Keep-Alive\r\n\r\n')
+            data = await upstream.read_until(b'\r\n\r\n')
+            await on_proxy_response(data)
 
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
-        upstream = tornado.iostream.IOStream(s)
+        tcpclient = tornado.tcpclient.TCPClient()
 
         proxy = get_proxy(self.request.uri)
         if proxy:
             proxy_host, proxy_port = parse_proxy(proxy)
-            await upstream.connect((proxy_host, proxy_port))
+            upstream = await tcpclient.connect(proxy_host, proxy_port)
             await start_proxy_tunnel()
         else:
-            await upstream.connect((host, int(port)))
+            upstream = await tcpclient.connect(host, int(port))
             await start_tunnel()
 
 
-def run_proxy(port, start_ioloop=True):
+def run_proxy(address, port, start_ioloop=True):
     """
     Run proxy on the specified port. If start_ioloop is True (default),
     the tornado IOLoop will be started immediately.
@@ -192,15 +216,19 @@ def run_proxy(port, start_ioloop=True):
     app = tornado.web.Application([
         (r'.*', ProxyHandler),
     ])
-    app.listen(port)
-    ioloop = tornado.ioloop.IOLoop.instance()
+    app.listen(port=port, address=address)
+    ioloop = tornado.ioloop.IOLoop.current()
+
     if start_ioloop:
         ioloop.start()
 
+
 if __name__ == '__main__':
+    address = "127.0.0.1"
     port = 8888
     if len(sys.argv) > 1:
-        port = int(sys.argv[1])
+        address = sys.argv[1]
+        port = int(sys.argv[2])
 
-    print ("Starting HTTP proxy on port %d" % port)
-    run_proxy(port)
+    print ("Starting HTTP proxy on %s:%s" % (address, port))
+    run_proxy(address, port)
