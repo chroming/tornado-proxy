@@ -3,3 +3,5 @@
 /dist/
 /doc/_build/
 *.pyc
+.idea
+tornado_proxy.egg-info/
