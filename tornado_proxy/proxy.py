@@ -60,7 +60,7 @@ def parse_proxy(proxy):
     return proxy_parsed.hostname, proxy_parsed.port
 
 
-def fetch_request(url, **kwargs):
+async def fetch_request(url, **kwargs):
     proxy = get_proxy(url)
     if proxy:
         logger.debug('Forward request via upstream proxy %s', proxy)
@@ -71,7 +71,7 @@ def fetch_request(url, **kwargs):
         kwargs['proxy_port'] = port
 
     client = tornado.httpclient.AsyncHTTPClient()
-    return client.fetch(url, raise_error=False, follow_redirects=True, max_redirects=3)
+    return await client.fetch(url, raise_error=False, follow_redirects=True, max_redirects=3)
 
 
 class ProxyHandler(tornado.web.RequestHandler):
@@ -120,7 +120,6 @@ class ProxyHandler(tornado.web.RequestHandler):
                 if response.body:                   
                     self.set_header('Content-Length', len(response.body))
                     self.write(response.body)
-            self.finish()
 
         body = self.request.body
         if not body:
@@ -140,8 +139,8 @@ class ProxyHandler(tornado.web.RequestHandler):
             else:
                 self.set_status(500)
                 self.write('Internal server error:\n' + str(e))
-
-                await self.finish()
+        finally:
+            await self.finish()
 
     put = get
     post = get
@@ -230,5 +229,5 @@ if __name__ == '__main__':
         address = sys.argv[1]
         port = int(sys.argv[2])
 
-    print ("Starting HTTP proxy on %s:%s" % (address, port))
+    print("Starting HTTP proxy on %s:%s" % (address, port))
     run_proxy(address, port)
