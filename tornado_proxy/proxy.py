@@ -74,6 +74,20 @@ async def fetch_request(url, **kwargs):
     return await client.fetch(url, raise_error=False, follow_redirects=True, max_redirects=3)
 
 
+async def relay_stream(reader, writer):
+    try:
+        while True:
+            data = await reader.read_bytes(1024 * 64, partial=True)
+            if writer.closed():
+                return
+            if data:
+                writer.write(data)
+            else:
+                break
+    except tornado.iostream.StreamClosedError:
+        pass
+
+
 class ProxyHandler(tornado.web.RequestHandler):
     SUPPORTED_METHODS = ("GET", "HEAD", "POST", "DELETE", "PATCH", "PUT", "OPTIONS", "CONNECT")
     
@@ -153,25 +167,12 @@ class ProxyHandler(tornado.web.RequestHandler):
         host, port = self.request.uri.split(':')
         client = self.request.connection.stream
 
-        async def relay(reader, writer):
-            try:
-                while True:
-                    data = await reader.read_bytes(1024*64, partial=True)
-                    if writer.closed():
-                        return
-                    if data:
-                        writer.write(data)
-                    else:
-                        break
-            except tornado.iostream.StreamClosedError:
-                pass
-
         async def start_tunnel():
             logger.debug('CONNECT tunnel established to %s', self.request.uri)
             client.write(b'HTTP/1.0 200 Connection established\r\n\r\n')
             await asyncio.gather(
-                    relay(client, upstream),
-                    relay(upstream, client)
+                    relay_stream(client, upstream),
+                    relay_stream(upstream, client)
             )
             client.close()
             upstream.close()
@@ -223,7 +224,7 @@ def run_proxy(address, port, start_ioloop=True):
 
 
 if __name__ == '__main__':
-    address = "127.0.0.1"
+    address = "0.0.0.0"
     port = 8888
     if len(sys.argv) > 1:
         address = sys.argv[1]
