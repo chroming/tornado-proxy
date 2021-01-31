@@ -70,8 +70,8 @@ async def fetch_request(url, **kwargs):
         kwargs['proxy_host'] = host
         kwargs['proxy_port'] = port
 
-    client = tornado.httpclient.AsyncHTTPClient()
-    return await client.fetch(url, raise_error=False, follow_redirects=True, max_redirects=3)
+    client = tornado.httpclient.AsyncHTTPClient(force_instance=True)
+    return await client.fetch(url, raise_error=False, **kwargs)
 
 
 async def relay_stream(reader, writer):
@@ -95,7 +95,7 @@ class ProxyHandler(tornado.web.RequestHandler):
         return None # disable tornado Etag
 
     async def prepare(self):
-        logger.debug("Prepare to %s %s %s" % (self.request.method, self.request.uri, self.request.headers))
+        logger.debug("Prepare to %s %s" % (self.request.method, self.request.uri))
         return super(ProxyHandler, self).prepare()
 
     async def options(self):
