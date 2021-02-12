@@ -29,6 +29,7 @@ import asyncio
 import logging
 import os
 import sys
+import json
 from urllib.parse import urlparse
 
 import tornado.httpserver
@@ -38,6 +39,7 @@ import tornado.web
 import tornado.httpclient
 import tornado.httputil
 import tornado.tcpclient
+import tornado.netutil
 
 logger = logging.getLogger('tornado_proxy')
 hd = logging.StreamHandler()
@@ -45,6 +47,12 @@ fmt = logging.Formatter("||%(asctime)s|%(name)s|%(levelname)s||%(message)s")
 hd.setFormatter(fmt)
 logger.addHandler(hd)
 logger.setLevel('DEBUG')
+
+hostname_mapping = {}
+if os.path.exists("hosts.json"):
+    with open("hosts.json") as f:
+        hostname_mapping = json.load(f)
+print(hostname_mapping)
 
 __all__ = ['ProxyHandler', 'run_proxy']
 
@@ -70,7 +78,7 @@ async def fetch_request(url, **kwargs):
         kwargs['proxy_host'] = host
         kwargs['proxy_port'] = port
 
-    client = tornado.httpclient.AsyncHTTPClient(force_instance=True)
+    client = tornado.httpclient.AsyncHTTPClient(force_instance=True, hostname_mapping=hostname_mapping)
     return await client.fetch(url, raise_error=False, **kwargs)
 
 
@@ -196,7 +204,9 @@ class ProxyHandler(tornado.web.RequestHandler):
             data = await upstream.read_until(b'\r\n\r\n')
             await on_proxy_response(data)
 
-        tcpclient = tornado.tcpclient.TCPClient()
+        resolver = tornado.netutil.Resolver()
+        tcpclient = tornado.tcpclient.TCPClient(
+            resolver=tornado.netutil.OverrideResolver(resolver, mapping=hostname_mapping))
 
         proxy = get_proxy(self.request.uri)
         if proxy:
