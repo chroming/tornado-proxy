@@ -18,7 +18,6 @@ Can be used as standalone script, or integrated with your Tornado app.
 
     python tornado_proxy/proxy.py 8888
 
-
 ### Module usage
 
     from tornado_proxy import run_proxy
@@ -26,12 +25,20 @@ Can be used as standalone script, or integrated with your Tornado app.
     ...
     tornado.ioloop.IOLoop.instance().start()
 
+### hostname mapping
+
+You can add hosts.json for mapping hostname to ip:
+
+```json
+{
+  "baidu.com": "127.0.0.1"
+}
+```
 
 ### Based on
 
 GET and POST proxying is heavily based on the code by Bill Janssen posted to:
 http://groups.google.com/group/python-tornado/msg/7bea08e7a049cf26
-
 
 ### License and copyright
 
