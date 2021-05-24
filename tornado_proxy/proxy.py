@@ -43,16 +43,16 @@ import tornado.netutil
 
 logger = logging.getLogger('tornado_proxy')
 hd = logging.StreamHandler()
-fmt = logging.Formatter("||%(asctime)s|%(name)s|%(levelname)s||%(message)s")
+fmt = logging.Formatter("%(asctime)s|%(name)s|%(levelname)s|%(message)s")
 hd.setFormatter(fmt)
 logger.addHandler(hd)
-logger.setLevel('DEBUG')
+logger.setLevel('INFO')
 
 hostname_mapping = {}
 if os.path.exists("hosts.json"):
     with open("hosts.json") as f:
         hostname_mapping = json.load(f)
-print(hostname_mapping)
+logger.info("Get hosts mapping: %s" % hostname_mapping)
 
 __all__ = ['ProxyHandler', 'run_proxy']
 
@@ -120,102 +120,109 @@ class ProxyHandler(tornado.web.RequestHandler):
             self.set_header('Access-Control-Allow-Methods',
                             self.request.headers.get('Access-Control-Request-Method'))
         self.set_status(204)
-        await self.finish()
+        if not self._finished:
+            await self.finish()
 
-    async def get(self):
+    def direct_copy_response(self, response):
+        """Direct copy http response data to client"""
+        if response.error and not isinstance(response.error, tornado.httpclient.HTTPError):
+            self.set_status(500)
+            self.write('Internal server error:\n' + str(response.error))
+        else:
+            self.set_status(response.code, response.reason)
+            self._headers = tornado.httputil.HTTPHeaders()  # clear tornado default header
+            for header, v in response.headers.get_all():
+                if header not in ('Content-Length', 'Transfer-Encoding', 'Content-Encoding', 'Connection'):
+                    self.add_header(header, v)  # some header appear multiple times, eg 'Set-Cookie'
+
+            if response.body:
+                self.set_header('Content-Length', len(response.body))
+                self.write(response.body)
+
+    async def http_proxy(self):
         logger.debug('Handle %s request to %s', self.request.method,
                      self.request.uri)
-
-        def handle_response(response):
-            if (response.error and not
-                    isinstance(response.error, tornado.httpclient.HTTPError)):
-                self.set_status(500)
-                self.write('Internal server error:\n' + str(response.error))
-            else:
-                self.set_status(response.code, response.reason)
-                self._headers = tornado.httputil.HTTPHeaders() # clear tornado default header
-                
-                for header, v in response.headers.get_all():
-                    if header not in ('Content-Length', 'Transfer-Encoding', 'Content-Encoding', 'Connection'):
-                        self.add_header(header, v) # some header appear multiple times, eg 'Set-Cookie'
-                
-                if response.body:                   
-                    self.set_header('Content-Length', len(response.body))
-                    self.write(response.body)
-
         body = self.request.body
         if not body:
             body = None
         try:
             if 'Proxy-Connection' in self.request.headers:
-                del self.request.headers['Proxy-Connection'] 
+                del self.request.headers['Proxy-Connection']
             resp = await fetch_request(
                 self.request.uri,
                 method=self.request.method, body=body,
                 headers=self.request.headers, follow_redirects=False,
                 allow_nonstandard_methods=True)
-            handle_response(resp)
+            self.direct_copy_response(resp)
         except tornado.httpclient.HTTPError as e:
             if hasattr(e, 'response') and e.response:
-                handle_response(e.response)
+                self.direct_copy_response(e.response)
             else:
                 self.set_status(500)
                 self.write('Internal server error:\n' + str(e))
         finally:
-            await self.finish()
+            if not self._finished:
+                await self.finish()
 
-    put = get
-    post = get
-    head = get
-    patch = get
-    delete = get
+    get = http_proxy
+    put = http_proxy
+    post = http_proxy
+    head = http_proxy
+    patch = http_proxy
+    delete = http_proxy
 
-    async def connect(self):
-        logger.debug('Start CONNECT to %s', self.request.uri)
-        host, port = self.request.uri.split(':')
-        client = self.request.connection.stream
-
-        async def start_tunnel():
-            logger.debug('CONNECT tunnel established to %s', self.request.uri)
+    async def start_tunnel(self, client, upstream):
+        logger.debug('CONNECT tunnel established to %s', self.request.uri)
+        try:
             client.write(b'HTTP/1.0 200 Connection established\r\n\r\n')
             await asyncio.gather(
-                    relay_stream(client, upstream),
-                    relay_stream(upstream, client)
+                relay_stream(client, upstream),
+                relay_stream(upstream, client)
             )
             client.close()
             upstream.close()
+        except Exception:
+            pass
 
-        async def on_proxy_response(data=None):
-            if data:
-                first_line = data.splitlines()[0]
-                http_v, status, text = first_line.split(None, 2)
-                if int(status) == 200:
-                    logger.debug('Connected to upstream proxy %s', proxy)
-                    await start_tunnel()
-                    return
+    async def start_proxy_tunnel(self, proxy, client, upstream):
+        await upstream.write(b'CONNECT %s HTTP/1.1\r\n' % self.request.uri)
+        await upstream.write(b'Host: %s\r\n' % self.request.uri)
+        await upstream.write(b'Proxy-Connection: Keep-Alive\r\n\r\n')
+        data = await upstream.read_until(b'\r\n\r\n')
+        if data:
+            first_line = data.splitlines()[0]
+            http_v, status, text = first_line.split(None, 2)
+            if int(status) == 200:
+                logger.debug('Connected to upstream proxy %s', proxy)
+                await self.start_tunnel(client, upstream)
+                return
+        self.set_status(500)
 
-            self.set_status(500)
-            await self.finish()
-
-        async def start_proxy_tunnel():
-            await upstream.write(b'CONNECT %s HTTP/1.1\r\n' % self.request.uri)
-            await upstream.write(b'Host: %s\r\n' % self.request.uri)
-            await upstream.write(b'Proxy-Connection: Keep-Alive\r\n\r\n')
-            data = await upstream.read_until(b'\r\n\r\n')
-            await on_proxy_response(data)
-
-        resolver = tornado.netutil.Resolver()
-        tcpclient = tornado.tcpclient.TCPClient(
-            resolver=tornado.netutil.OverrideResolver(resolver, mapping=hostname_mapping))
-
-        proxy = get_proxy(self.request.uri)
-        if proxy:
-            proxy_host, proxy_port = parse_proxy(proxy)
-            upstream = await tcpclient.connect(proxy_host, proxy_port)
-            await start_proxy_tunnel()
-        else:
-            upstream = await tcpclient.connect(host, int(port))
-            await start_tunnel()
+    async def connect(self):
+        logger.debug('Start CONNECT to %s', self.request.uri)
+        try:
+            host, port = self.request.uri.split(':')
+            client = self.request.connection.stream
+            resolver = tornado.netutil.Resolver()
+            tcpclient = tornado.tcpclient.TCPClient(
+                resolver=tornado.netutil.OverrideResolver(resolver, mapping=hostname_mapping))
+            proxy = get_proxy(self.request.uri)
+            if proxy:
+                proxy_host, proxy_port = parse_proxy(proxy)
+                upstream = await tcpclient.connect(proxy_host, proxy_port)
+                await self.start_proxy_tunnel(proxy, client, upstream)
+            else:
+                upstream = await tcpclient.connect(host, int(port))
+                await self.start_tunnel(client, upstream)
+        except Exception as e:
+            logger.warning("CONNECT proxy error! %s %s" % (e, host))
+            import traceback
+            traceback.print_exc()
+        finally:
+            try:
+                await self.finish()
+            except Exception:
+                pass
 
 
 def run_proxy(address, port, start_ioloop=True):
