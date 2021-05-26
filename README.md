@@ -1,63 +1,27 @@
-## Asynchronous HTTP proxy with tunnelling support
+# 基于tornado实现的http代理
 
-Built using Tornado (tested with version 2.2), supports HTTP GET, POST and
-CONNECT methods.
+fork自https://github.com/boytm/tornado-proxy，做了一些优化。
+编写初衷在于为iOS设备提供性能尚可的HTTP代理（通过pyto运行），当然也可以在其他安装了python3+tornado的环境运行。
 
-Can be used as standalone script, or integrated with your Tornado app.
+优势如下：
 
+1. 第三方库只依赖tornado；
+2. 单个代理文件方便直接拷贝使用；
+3. 代码量少，便于修改。
 
-### Setup
+## 运行
 
-    # run self tests
-    python setup.py test
+运行环境Python3+tornado>=6.0
+`pip install tornado>=6.0`
 
-    # install it
-    python setup.py install
+python3 proxy.py
 
-### Command-line usage
+## 配置hosts映射
 
-    python tornado_proxy/proxy.py 8888
+对于某些需要手动配置hosts映射的机器，可以在运行目录下添加`hosts.json`，文件结构如下：
 
-### Module usage
-
-    from tornado_proxy import run_proxy
-    run_proxy(port, start_ioloop=False)
-    ...
-    tornado.ioloop.IOLoop.instance().start()
-
-### hostname mapping
-
-You can add hosts.json for mapping hostname to ip:
-
-```json
-{
-  "baidu.com": "127.0.0.1"
+`json {
+"baidu.com": "192.168.1.1",
+"nevelssl1.org": "192.168.1.1"
 }
-```
-
-### Based on
-
-GET and POST proxying is heavily based on the code by Bill Janssen posted to:
-http://groups.google.com/group/python-tornado/msg/7bea08e7a049cf26
-
-### License and copyright
-
-Copyright (C) 2012 Senko Rasic <senko.rasic@dobarkod.hr>
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
+`
