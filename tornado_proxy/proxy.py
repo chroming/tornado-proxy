@@ -120,8 +120,7 @@ class ProxyHandler(tornado.web.RequestHandler):
             self.set_header('Access-Control-Allow-Methods',
                             self.request.headers.get('Access-Control-Request-Method'))
         self.set_status(204)
-        if not self._finished:
-            await self.finish()
+        await self.try_finish()
 
     def direct_copy_response(self, response):
         """Direct copy http response data to client"""
@@ -138,6 +137,13 @@ class ProxyHandler(tornado.web.RequestHandler):
             if response.body:
                 self.set_header('Content-Length', len(response.body))
                 self.write(response.body)
+
+    async def try_finish(self):
+        try:
+            if not self._finished:
+                await self.finish()
+        except Exception as e:
+            logger.debug("Close connect error! %s" % e)
 
     async def http_proxy(self):
         logger.debug('Handle %s request to %s', self.request.method,
@@ -161,8 +167,7 @@ class ProxyHandler(tornado.web.RequestHandler):
                 self.set_status(500)
                 self.write('Internal server error:\n' + str(e))
         finally:
-            if not self._finished:
-                await self.finish()
+            await self.try_finish()
 
     get = http_proxy
     put = http_proxy
@@ -219,10 +224,7 @@ class ProxyHandler(tornado.web.RequestHandler):
             import traceback
             traceback.print_exc()
         finally:
-            try:
-                await self.finish()
-            except Exception:
-                pass
+            await self.try_finish()
 
 
 def run_proxy(address, port, start_ioloop=True):
